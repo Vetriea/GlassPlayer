@@ -11,10 +11,12 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21        # AGP 9 requires JDK 21
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: "9.8.2" # AGP 9.5 requires Gradle 9.x
+      - name: Ensure Android platform 37 is installed
+        run: yes | sdkmanager "platforms;android-37" > /dev/null 2>&1 || true
       - run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
