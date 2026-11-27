@@ -40,14 +40,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.*
@@ -58,7 +58,6 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -72,11 +71,20 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import dev.chrisbanes.haze.glass.GlassStyle
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -95,7 +103,17 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        player = ExoPlayer.Builder(this).build()
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                /* handleAudioFocus = */ true
+            )
+            .setHandleAudioBecomingNoisy(true) // pause when headphones are unplugged
+            .setWakeMode(C.WAKE_MODE_LOCAL)    // keep playing with the screen off
+            .build()
         setContent { MaterialTheme(colorScheme = darkColorScheme()) { App(player) } }
     }
     override fun onDestroy() { player.release(); super.onDestroy() }
@@ -120,11 +138,16 @@ fun loadSongs(ctx: Context): List<Song> {
 
 fun fmt(ms: Long): String { val s = ms / 1000; return "%d:%02d".format(s / 60, s % 60) }
 
+/**
+ * [px] controls the thumbnail decode size — requesting ~2x the on-screen dp size
+ * instead of always 512px cuts list thumbnail memory roughly in half.
+ */
 @Composable
-fun Cover(s: Song, mod: Modifier) {
+fun Cover(s: Song, mod: Modifier, px: Int = 512) {
     if (s.thumb != null) {
         AsyncImage(
-            model = s.thumb, contentDescription = null, contentScale = ContentScale.Crop,
+            model = ImageRequest.Builder(LocalContext.current).data(s.thumb).crossfade(200).build(),
+            contentDescription = null, contentScale = ContentScale.Crop,
             modifier = mod.background(Color(0xFF2C2C2E))
         )
         return
@@ -132,7 +155,7 @@ fun Cover(s: Song, mod: Modifier) {
     val ctx = LocalContext.current
     val bmp by produceState<Bitmap?>(null, s.id) {
         value = withContext(Dispatchers.IO) {
-            runCatching { ctx.contentResolver.loadThumbnail(s.uri, Size(512, 512), null) }.getOrNull()
+            runCatching { ctx.contentResolver.loadThumbnail(s.uri, Size(px, px), null) }.getOrNull()
         }
     }
     Box(mod.background(Color(0xFF2C2C2E))) {
@@ -141,22 +164,12 @@ fun Cover(s: Song, mod: Modifier) {
 }
 
 @Composable
-fun Glass(mod: Modifier, shape: Shape = RoundedCornerShape(31.dp), content: @Composable BoxScope.() -> Unit) {
-    Box(
-        mod.clip(shape)
-            .background(Brush.verticalGradient(listOf(Color.White.copy(.26f), Color.White.copy(.08f))))
-            .border(1.dp, Brush.verticalGradient(listOf(Color.White.copy(.55f), Color.White.copy(.08f))), shape),
-        contentAlignment = Alignment.Center, content = content
-    )
-}
-
-@Composable
 fun SongRow(s: Song, active: Boolean, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Cover(s, Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)))
+        Cover(s, Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)), px = 128)
         Spacer(Modifier.width(12.dp))
         Column {
             Text(s.title, color = if (active) Color(0xFFFA2D48) else Color.White, fontWeight = FontWeight.SemiBold,
@@ -192,7 +205,7 @@ fun SectionTitle(t: String) {
 fun FeatureCard(s: Song, onClick: () -> Unit) {
     Column(Modifier.width(300.dp).clickable { onClick() }) {
         Box(Modifier.size(300.dp).clip(RoundedCornerShape(14.dp))) {
-            Cover(s, Modifier.fillMaxSize())
+            Cover(s, Modifier.fillMaxSize(), px = 600)
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color.Black.copy(.8f)))))
             Text(s.title, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
@@ -204,7 +217,7 @@ fun FeatureCard(s: Song, onClick: () -> Unit) {
 @Composable
 fun SquareCard(s: Song, onClick: () -> Unit) {
     Column(Modifier.width(150.dp).clickable { onClick() }) {
-        Cover(s, Modifier.size(150.dp).clip(RoundedCornerShape(10.dp)))
+        Cover(s, Modifier.size(150.dp).clip(RoundedCornerShape(10.dp)), px = 300)
         Text(s.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
         Text(s.artist, color = Color.Gray, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -225,7 +238,9 @@ fun HomeScreen(
                     Column {
                         if (si > 0) SectionTitle(title)
                         LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                            items(list) { s -> if (si == 0) FeatureCard(s) { onRemote(s) } else SquareCard(s) { onRemote(s) } }
+                            items(list, key = { it.webUrl ?: "w${it.id}" }) { s ->
+                                if (si == 0) FeatureCard(s) { onRemote(s) } else SquareCard(s) { onRemote(s) }
+                            }
                         }
                     }
                 }
@@ -236,7 +251,7 @@ fun HomeScreen(
                 Column {
                     SectionTitle("From your phone")
                     LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        itemsIndexed(songs.take(12)) { n, s -> SquareCard(s) { onLocal(n) } }
+                        itemsIndexed(songs.take(12), key = { _, s -> "l${s.id}" }) { n, s -> SquareCard(s) { onLocal(n) } }
                     }
                 }
             }
@@ -264,6 +279,7 @@ fun BrowseScreen(bottom: Dp, onGenre: (String) -> Unit) {
                     Box(
                         Modifier.height(92.dp).clip(RoundedCornerShape(14.dp))
                             .background(Brush.linearGradient(listOf(Color(g.second), Color(g.third))))
+                            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(14.dp)) // subtle glass edge
                             .clickable { onGenre(g.first) }.padding(14.dp)
                     ) { Text(g.first, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold) }
                 }
@@ -281,7 +297,10 @@ fun LibraryScreen(songs: List<Song>, granted: Boolean, cur: Song?, bottom: Dp, o
             color = Color.Gray, modifier = Modifier.padding(20.dp)
         )
         LazyColumn(contentPadding = PaddingValues(bottom = bottom)) {
-            itemsIndexed(songs) { n, s -> SongRow(s, cur?.id == s.id) { onLocal(n) } }
+            // stable keys: correct item reuse while scrolling instead of re-binding everything
+            itemsIndexed(songs, key = { _, s -> "l${s.id}" }) { n, s ->
+                SongRow(s, cur?.id == s.id) { onLocal(n) }
+            }
         }
     }
 }
@@ -291,7 +310,7 @@ fun SearchScreen(
     query: String, onQuery: (String) -> Unit, status: String, results: List<Song>, cur: Song?, bottom: Dp,
     onSearch: () -> Unit, onRemote: (Song) -> Unit
 ) {
-    Column {
+    Column(Modifier.imePadding()) { // keyboard pushes content instead of covering the field
         ScreenTitle("Search")
         BasicTextField(
             value = query, onValueChange = onQuery, singleLine = true,
@@ -302,8 +321,10 @@ fun SearchScreen(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).fillMaxWidth(),
             decorationBox = { inner ->
                 Box(
-                    Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF1C1C1E)).padding(horizontal = 14.dp),
+                    Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.07f))
+                        .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.CenterStart
                 ) {
                     if (query.isEmpty()) Text("Songs, artists", color = Color.Gray)
@@ -313,16 +334,18 @@ fun SearchScreen(
         )
         if (status.isNotEmpty()) Text(status, color = Color.Gray, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
         LazyColumn(contentPadding = PaddingValues(bottom = bottom)) {
-            itemsIndexed(results) { _, s -> SongRow(s, cur?.id == s.id) { onRemote(s) } }
+            itemsIndexed(results, key = { _, s -> s.webUrl ?: "w${s.id}" }) { _, s ->
+                SongRow(s, cur?.id == s.id) { onRemote(s) }
+            }
         }
     }
 }
 
 @Composable
-fun TabBar(tab: Int, onTab: (Int) -> Unit, mod: Modifier) {
+fun TabBar(tab: Int, onTab: (Int) -> Unit, mod: Modifier, haze: dev.chrisbanes.haze.HazeState) {
     val names = listOf("Listen Now", "Browse", "Library", "Search")
     val icons = listOf("◉", "▦", "♫", "⌕")
-    Glass(mod.height(66.dp), RoundedCornerShape(33.dp)) {
+    LiquidGlass(haze, mod.height(66.dp), corner = RoundedCornerShape(33.dp), tintAlpha = 0.08f) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(6.dp)) {
             val w = maxWidth / 4
             val x by animateDpAsState(w * tab, tween(450, easing = FastOutSlowInEasing), label = "pill")
@@ -364,7 +387,6 @@ fun App(player: ExoPlayer) {
     var playing by remember { mutableStateOf(false) }
     var pos by remember { mutableLongStateOf(0L) }
     var dur by remember { mutableLongStateOf(1L) }
-    var drag by remember { mutableStateOf(false) }
     var full by remember { mutableStateOf(false) }
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
@@ -372,11 +394,14 @@ fun App(player: ExoPlayer) {
     var status by remember { mutableStateOf("") }
     var home by remember { mutableStateOf(emptyList<Pair<String, List<Song>>>()) }
     var homeMsg by remember { mutableStateOf("Loading…") }
+
+    // Load all four home feeds in parallel (was: one-by-one) — home screen shows up ~4x sooner
     LaunchedEffect(Unit) {
-        for (q in listOf("Top hits", "Chill vibes", "Late night", "Workout")) {
-            val r = withContext(Dispatchers.IO) { runCatching { YT.search(q) } }
-            r.onSuccess { l -> if (l.isNotEmpty()) home = home + (q to l.take(10)) }
+        val qs = listOf("Top hits", "Chill vibes", "Late night", "Workout")
+        val found = coroutineScope {
+            qs.map { q -> async { runCatching { withContext(Dispatchers.IO) { YT.search(q) } } } }.awaitAll()
         }
+        found.forEachIndexed { i, r -> r.onSuccess { l -> if (l.isNotEmpty()) home = home + (qs[i] to l.take(10)) } }
         if (home.isEmpty()) homeMsg = "Couldn't load recommendations. Check your internet."
     }
 
@@ -390,9 +415,10 @@ fun App(player: ExoPlayer) {
     }
     LaunchedEffect(Unit) {
         while (true) {
-            if (!drag) pos = player.currentPosition
+            // only poll while actually playing — no wasted wake-ups on battery while paused
+            if (playing) pos = player.currentPosition
             dur = player.duration.coerceAtLeast(1L)
-            delay(300)
+            delay(if (playing) 400 else 1500)
         }
     }
     BackHandler(full) { full = false }
@@ -431,23 +457,32 @@ fun App(player: ExoPlayer) {
     }
 
     fun searchFor(g: String) { query = "$g music"; tab = 3; doSearch() }
-    val red = Red
     val cur = queue.getOrNull(idx)
     val bottomPad = if (cur != null && !full) 200.dp else 120.dp
     val ease = FastOutSlowInEasing
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Box(Modifier.fillMaxSize().statusBarsPadding()) {
-            Crossfade(tab, animationSpec = tween(350), label = "pages") { t ->
-                when (t) {
-                    0 -> HomeScreen(home, homeMsg, songs, bottomPad, { playRemote(it) }, { playLocal(it) })
-                    1 -> BrowseScreen(bottomPad) { searchFor(it) }
-                    2 -> LibraryScreen(songs, granted, cur, bottomPad) { playLocal(it) }
-                    else -> SearchScreen(query, { query = it }, status, results, cur, bottomPad, { doSearch() }, { playRemote(it) })
+    // One haze state for the main UI, one for the full-screen player.
+    // Glass elements must be SIBLINGS of the hazeSource box, never children of it.
+    val haze = rememberHazeState()
+    val npHaze = rememberHazeState()
+
+    Box(Modifier.fillMaxSize()) {
+        // ---- everything the glass samples: screens + background ----
+        Box(Modifier.fillMaxSize().hazeSource(haze)) {
+            Box(Modifier.fillMaxSize().background(Color.Black))
+            Box(Modifier.fillMaxSize().statusBarsPadding()) {
+                Crossfade(tab, animationSpec = tween(350), label = "pages") { t ->
+                    when (t) {
+                        0 -> HomeScreen(home, homeMsg, songs, bottomPad, { playRemote(it) }, { playLocal(it) })
+                        1 -> BrowseScreen(bottomPad) { searchFor(it) }
+                        2 -> LibraryScreen(songs, granted, cur, bottomPad) { playLocal(it) }
+                        else -> SearchScreen(query, { query = it }, status, results, cur, bottomPad, { doSearch() }, { playRemote(it) })
+                    }
                 }
             }
         }
 
+        // ---- glass: mini player ----
         AnimatedVisibility(
             visible = cur != null && !full,
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -455,9 +490,13 @@ fun App(player: ExoPlayer) {
             exit = slideOutVertically(tween(400, easing = ease)) { it } + fadeOut(tween(300))
         ) {
             cur?.let { s ->
-                Glass(Modifier.navigationBarsPadding().padding(start = 14.dp, end = 14.dp, bottom = 92.dp).fillMaxWidth().height(60.dp)) {
+                LiquidGlass(
+                    haze,
+                    Modifier.navigationBarsPadding().padding(start = 14.dp, end = 14.dp, bottom = 92.dp).fillMaxWidth().height(62.dp),
+                    corner = RoundedCornerShape(24.dp), tintAlpha = 0.08f
+                ) {
                     Row(Modifier.fillMaxSize().clickable { full = true }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Cover(s, Modifier.size(46.dp).clip(CircleShape))
+                        Cover(s, Modifier.size(46.dp).clip(CircleShape), px = 128)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(s.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -470,15 +509,17 @@ fun App(player: ExoPlayer) {
             }
         }
 
+        // ---- glass: tab bar ----
         AnimatedVisibility(
             visible = !full,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(tween(450, easing = ease)) { it } + fadeIn(tween(450)),
             exit = slideOutVertically(tween(400, easing = ease)) { it } + fadeOut(tween(300))
         ) {
-            TabBar(tab, { tab = it }, Modifier.navigationBarsPadding().padding(14.dp).fillMaxWidth())
+            TabBar(tab, { tab = it }, Modifier.navigationBarsPadding().padding(14.dp).fillMaxWidth(), haze)
         }
 
+        // ---- full-screen player ----
         AnimatedVisibility(
             visible = full && cur != null,
             modifier = Modifier.fillMaxSize(),
@@ -488,9 +529,25 @@ fun App(player: ExoPlayer) {
             cur?.let { s ->
                 val sc by animateFloatAsState(if (playing) 1f else 0.88f, tween(500, easing = ease), label = "cover")
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
-                    Cover(s, Modifier.fillMaxSize().blur(80.dp).alpha(.55f))
+                    // Cheap ambient blur: render the cover at 1/4 size, blur THAT, then scale up.
+                    // ~16x fewer pixels than blurring a full-screen bitmap, same soft look.
+                    // It is also the haze source for the play button.
+                    BoxWithConstraints(Modifier.matchParentSize().hazeSource(npHaze)) {
+                        Box(Modifier.matchParentSize().background(Color(0xFF0A0A0B)))
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Cover(
+                                s,
+                                Modifier.size(maxWidth / 4f, maxHeight / 4f)
+                                    .blur(12.dp).alpha(0.72f)
+                                    .graphicsLayer { scaleX = 4.6f; scaleY = 4.6f },
+                                px = 256
+                            )
+                        }
+                    }
+                    // scrollable: nothing gets clipped on short / landscape screens
                     Column(
-                        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(28.dp),
+                        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(28.dp)
+                            .verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Box(Modifier.size(40.dp, 5.dp).clip(CircleShape).background(Color.White.copy(.4f)).clickable { full = false })
@@ -500,30 +557,25 @@ fun App(player: ExoPlayer) {
                         Text(s.title, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
                         Text(s.artist, color = Color.White.copy(.65f), fontSize = 18.sp, maxLines = 1, modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(16.dp))
-                        Slider(
-                            value = pos.toFloat().coerceIn(0f, dur.toFloat()),
-                            onValueChange = { drag = true; pos = it.toLong() },
-                            onValueChangeFinished = { player.seekTo(pos); drag = false },
-                            valueRange = 0f..dur.toFloat(),
-                            colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White,
-                                inactiveTrackColor = Color.White.copy(.25f))
-                        )
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(fmt(pos), color = Color.White.copy(.6f), fontSize = 12.sp)
-                            Text(fmt(dur), color = Color.White.copy(.6f), fontSize = 12.sp)
-                        }
-                        Spacer(Modifier.weight(1f))
+                        Spacer(Modifier.height(18.dp))
+                        GlassSeekbar(pos = pos, dur = dur, onSeek = { ms ->
+                            pos = ms
+                            player.seekTo(ms)
+                        })
+                        Spacer(Modifier.height(28.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(32.dp)) {
                             Text("⏮", color = Color.White, fontSize = 32.sp, modifier = Modifier.clickable { player.seekToPreviousMediaItem() }.padding(12.dp))
-                            Glass(Modifier.size(84.dp), CircleShape) {
+                            LiquidGlass(
+                                npHaze, Modifier.size(84.dp),
+                                corner = RoundedCornerShape(50), tintAlpha = 0.12f, base = GlassStyle.clear
+                            ) {
                                 Box(Modifier.fillMaxSize().clickable { if (playing) player.pause() else player.play() }, Alignment.Center) {
                                     Text(if (playing) "⏸" else "▶", color = Color.White, fontSize = 34.sp)
                                 }
                             }
                             Text("⏭", color = Color.White, fontSize = 32.sp, modifier = Modifier.clickable { player.seekToNextMediaItem() }.padding(12.dp))
                         }
-                        Spacer(Modifier.height(24.dp))
+                        Spacer(Modifier.height(40.dp))
                     }
                 }
             }
