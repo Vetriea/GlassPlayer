@@ -20,6 +20,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -30,8 +31,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -61,6 +68,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -158,6 +166,185 @@ fun SongRow(s: Song, active: Boolean, onClick: () -> Unit) {
     }
 }
 
+val Red = Color(0xFFFA2D48)
+
+@Composable
+fun FadeUp(content: @Composable () -> Unit) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val a by animateFloatAsState(if (shown) 1f else 0f, tween(550, easing = FastOutSlowInEasing), label = "fadeUp")
+    Box(Modifier.graphicsLayer { alpha = a; translationY = (1f - a) * 40f }) { content() }
+}
+
+@Composable
+fun ScreenTitle(t: String) {
+    Text(t, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
+        modifier = Modifier.padding(20.dp, 16.dp, 20.dp, 12.dp))
+}
+
+@Composable
+fun SectionTitle(t: String) {
+    Text(t, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(20.dp, 22.dp, 20.dp, 12.dp))
+}
+
+@Composable
+fun FeatureCard(s: Song, onClick: () -> Unit) {
+    Column(Modifier.width(300.dp).clickable { onClick() }) {
+        Box(Modifier.size(300.dp).clip(RoundedCornerShape(14.dp))) {
+            Cover(s, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent, Color.Black.copy(.8f)))))
+            Text(s.title, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
+        }
+        Text(s.artist, color = Color.Gray, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 8.dp))
+    }
+}
+
+@Composable
+fun SquareCard(s: Song, onClick: () -> Unit) {
+    Column(Modifier.width(150.dp).clickable { onClick() }) {
+        Cover(s, Modifier.size(150.dp).clip(RoundedCornerShape(10.dp)))
+        Text(s.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+        Text(s.artist, color = Color.Gray, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+fun HomeScreen(
+    home: List<Pair<String, List<Song>>>, homeMsg: String, songs: List<Song>, bottom: Dp,
+    onRemote: (Song) -> Unit, onLocal: (Int) -> Unit
+) {
+    LazyColumn(contentPadding = PaddingValues(bottom = bottom)) {
+        item { ScreenTitle("Listen Now") }
+        if (home.isEmpty()) item { Text(homeMsg, color = Color.Gray, modifier = Modifier.padding(20.dp)) }
+        home.forEachIndexed { si, (title, list) ->
+            item(key = title) {
+                FadeUp {
+                    Column {
+                        if (si > 0) SectionTitle(title)
+                        LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            items(list) { s -> if (si == 0) FeatureCard(s) { onRemote(s) } else SquareCard(s) { onRemote(s) } }
+                        }
+                    }
+                }
+            }
+        }
+        if (songs.isNotEmpty()) item(key = "phone") {
+            FadeUp {
+                Column {
+                    SectionTitle("From your phone")
+                    LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        itemsIndexed(songs.take(12)) { n, s -> SquareCard(s) { onLocal(n) } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+val GENRES = listOf(
+    Triple("Pop", 0xFFFF6A88, 0xFFFF99AC), Triple("Chill", 0xFF4FACFE, 0xFF00F2FE),
+    Triple("Dance", 0xFFA18CD1, 0xFFFBC2EB), Triple("Indie", 0xFF43E97B, 0xFF38F9D7),
+    Triple("Late night", 0xFF667EEA, 0xFF764BA2), Triple("Focus", 0xFFF6D365, 0xFFFDA085),
+    Triple("Hip-hop", 0xFFFA709A, 0xFFFEE140), Triple("Rock", 0xFF30CFD0, 0xFF330867)
+)
+
+@Composable
+fun BrowseScreen(bottom: Dp, onGenre: (String) -> Unit) {
+    Column {
+        ScreenTitle("Browse")
+        FadeUp {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = bottom),
+                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(GENRES) { g ->
+                    Box(
+                        Modifier.height(92.dp).clip(RoundedCornerShape(14.dp))
+                            .background(Brush.linearGradient(listOf(Color(g.second), Color(g.third))))
+                            .clickable { onGenre(g.first) }.padding(14.dp)
+                    ) { Text(g.first, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LibraryScreen(songs: List<Song>, granted: Boolean, cur: Song?, bottom: Dp, onLocal: (Int) -> Unit) {
+    Column {
+        ScreenTitle("Library")
+        if (songs.isEmpty()) Text(
+            if (granted) "No music found on this phone." else "Allow music access to see your songs.",
+            color = Color.Gray, modifier = Modifier.padding(20.dp)
+        )
+        LazyColumn(contentPadding = PaddingValues(bottom = bottom)) {
+            itemsIndexed(songs) { n, s -> SongRow(s, cur?.id == s.id) { onLocal(n) } }
+        }
+    }
+}
+
+@Composable
+fun SearchScreen(
+    query: String, onQuery: (String) -> Unit, status: String, results: List<Song>, cur: Song?, bottom: Dp,
+    onSearch: () -> Unit, onRemote: (Song) -> Unit
+) {
+    Column {
+        ScreenTitle("Search")
+        BasicTextField(
+            value = query, onValueChange = onQuery, singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
+            cursorBrush = SolidColor(Color.White),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).fillMaxWidth(),
+            decorationBox = { inner ->
+                Box(
+                    Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF1C1C1E)).padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (query.isEmpty()) Text("Songs, artists", color = Color.Gray)
+                    inner()
+                }
+            }
+        )
+        if (status.isNotEmpty()) Text(status, color = Color.Gray, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        LazyColumn(contentPadding = PaddingValues(bottom = bottom)) {
+            itemsIndexed(results) { _, s -> SongRow(s, cur?.id == s.id) { onRemote(s) } }
+        }
+    }
+}
+
+@Composable
+fun TabBar(tab: Int, onTab: (Int) -> Unit, mod: Modifier) {
+    val names = listOf("Listen Now", "Browse", "Library", "Search")
+    val icons = listOf("◉", "▦", "♫", "⌕")
+    Glass(mod.height(66.dp), RoundedCornerShape(33.dp)) {
+        BoxWithConstraints(Modifier.fillMaxSize().padding(6.dp)) {
+            val w = maxWidth / 4
+            val x by animateDpAsState(w * tab, tween(450, easing = FastOutSlowInEasing), label = "pill")
+            Box(Modifier.offset(x = x).width(w).fillMaxHeight().clip(RoundedCornerShape(27.dp)).background(Color.White.copy(.18f)))
+            Row(Modifier.fillMaxSize()) {
+                names.forEachIndexed { n, t ->
+                    val c = animateColorAsState(if (tab == n) Red else Color.White.copy(.6f), tween(300), label = "tabc").value
+                    Column(
+                        Modifier.weight(1f).fillMaxHeight().clickable(
+                            interactionSource = remember { MutableInteractionSource() }, indication = null
+                        ) { onTab(n) },
+                        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(icons[n], color = c, fontSize = 18.sp)
+                        Text(t, color = c, fontSize = 10.sp, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun App(player: ExoPlayer) {
     val ctx = LocalContext.current
@@ -183,6 +370,15 @@ fun App(player: ExoPlayer) {
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf(emptyList<Song>()) }
     var status by remember { mutableStateOf("") }
+    var home by remember { mutableStateOf(emptyList<Pair<String, List<Song>>>()) }
+    var homeMsg by remember { mutableStateOf("Loading…") }
+    LaunchedEffect(Unit) {
+        for (q in listOf("Top hits", "Chill vibes", "Late night", "Workout")) {
+            val r = withContext(Dispatchers.IO) { runCatching { YT.search(q) } }
+            r.onSuccess { l -> if (l.isNotEmpty()) home = home + (q to l.take(10)) }
+        }
+        if (home.isEmpty()) homeMsg = "Couldn't load recommendations. Check your internet."
+    }
 
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -234,61 +430,20 @@ fun App(player: ExoPlayer) {
         }
     }
 
-    val red = Color(0xFFFA2D48)
+    fun searchFor(g: String) { query = "$g music"; tab = 3; doSearch() }
+    val red = Red
     val cur = queue.getOrNull(idx)
+    val bottomPad = if (cur != null && !full) 200.dp else 120.dp
     val ease = FastOutSlowInEasing
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            Text(if (tab == 0) "Library" else "YouTube", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.ExtraBold,
-                modifier = Modifier.padding(20.dp, 16.dp, 20.dp, 12.dp))
-            Glass(Modifier.padding(horizontal = 20.dp).width(220.dp).height(40.dp), RoundedCornerShape(20.dp)) {
-                Row(Modifier.fillMaxSize()) {
-                    listOf("Library", "YouTube").forEachIndexed { n, t ->
-                        val c = animateColorAsState(if (tab == n) Color.White else Color.White.copy(.5f), tween(300), label = "tab").value
-                        Box(Modifier.weight(1f).fillMaxHeight().clickable { tab = n }, Alignment.Center) {
-                            Text(t, color = c, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
+        Box(Modifier.fillMaxSize().statusBarsPadding()) {
             Crossfade(tab, animationSpec = tween(350), label = "pages") { t ->
-                if (t == 0) {
-                    Column {
-                        if (songs.isEmpty()) Text(
-                            if (granted) "No music found on this phone." else "Allow music access to see your songs.",
-                            color = Color.Gray, modifier = Modifier.padding(20.dp)
-                        )
-                        LazyColumn(contentPadding = PaddingValues(bottom = 130.dp)) {
-                            itemsIndexed(songs) { n, s -> SongRow(s, cur?.id == s.id) { playLocal(n) } }
-                        }
-                    }
-                } else {
-                    Column {
-                        BasicTextField(
-                            value = query, onValueChange = { query = it }, singleLine = true,
-                            textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
-                            cursorBrush = SolidColor(Color.White),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { doSearch() }),
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).fillMaxWidth(),
-                            decorationBox = { inner ->
-                                Box(
-                                    Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(14.dp))
-                                        .background(Color(0xFF1C1C1E)).padding(horizontal = 14.dp),
-                                    contentAlignment = Alignment.CenterStart
-                                ) {
-                                    if (query.isEmpty()) Text("Songs, artists", color = Color.Gray)
-                                    inner()
-                                }
-                            }
-                        )
-                        if (status.isNotEmpty()) Text(status, color = Color.Gray, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-                        LazyColumn(contentPadding = PaddingValues(bottom = 130.dp)) {
-                            itemsIndexed(results) { _, s -> SongRow(s, cur?.id == s.id) { playRemote(s) } }
-                        }
-                    }
+                when (t) {
+                    0 -> HomeScreen(home, homeMsg, songs, bottomPad, { playRemote(it) }, { playLocal(it) })
+                    1 -> BrowseScreen(bottomPad) { searchFor(it) }
+                    2 -> LibraryScreen(songs, granted, cur, bottomPad) { playLocal(it) }
+                    else -> SearchScreen(query, { query = it }, status, results, cur, bottomPad, { doSearch() }, { playRemote(it) })
                 }
             }
         }
@@ -300,7 +455,7 @@ fun App(player: ExoPlayer) {
             exit = slideOutVertically(tween(400, easing = ease)) { it } + fadeOut(tween(300))
         ) {
             cur?.let { s ->
-                Glass(Modifier.navigationBarsPadding().padding(14.dp).fillMaxWidth().height(62.dp)) {
+                Glass(Modifier.navigationBarsPadding().padding(start = 14.dp, end = 14.dp, bottom = 92.dp).fillMaxWidth().height(60.dp)) {
                     Row(Modifier.fillMaxSize().clickable { full = true }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Cover(s, Modifier.size(46.dp).clip(CircleShape))
                         Spacer(Modifier.width(12.dp))
@@ -313,6 +468,15 @@ fun App(player: ExoPlayer) {
                     }
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = !full,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(tween(450, easing = ease)) { it } + fadeIn(tween(450)),
+            exit = slideOutVertically(tween(400, easing = ease)) { it } + fadeOut(tween(300))
+        ) {
+            TabBar(tab, { tab = it }, Modifier.navigationBarsPadding().padding(14.dp).fillMaxWidth())
         }
 
         AnimatedVisibility(
